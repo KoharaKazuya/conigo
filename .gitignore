@@ -1,0 +1,8 @@
+/bin
+/pkg
+/src/*
+!/src/github.com
+/src/github.com/*
+!/src/github.com/KoharaKazuya
+/src/github.com/KoharaKazuya/*
+!/src/github.com/KoharaKazuya/conigo
