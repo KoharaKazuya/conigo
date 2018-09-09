@@ -14,19 +14,13 @@ Conigo is the almost subset of dig.
 package conigo
 
 import (
+	"fmt"
 	"reflect"
 )
 
 // Container is a DI (Dependency Injection) container
 type Container struct {
 	registry map[reflect.Type]*entry
-}
-
-type entry struct {
-	constructor  interface{}
-	constructing bool
-	resolved     bool
-	value        reflect.Value
 }
 
 // New generates Container
@@ -95,4 +89,121 @@ func (c *Container) Resolve(resolver interface{}) error {
 	}
 
 	return nil
+}
+
+type entry struct {
+	constructor  interface{}
+	constructing bool
+	resolved     bool
+	value        reflect.Value
+}
+
+var errorInterface = reflect.TypeOf((*error)(nil)).Elem()
+
+func (c *Container) validateConstructorFunction(constructor interface{}) error {
+	constructorType := reflect.TypeOf(constructor)
+
+	if constructorType.Kind() != reflect.Func {
+		return fmt.Errorf("must provide function: got %v (type %v)", constructor, constructorType)
+	}
+
+	if constructorType.NumOut() < 1 {
+		return fmt.Errorf("must provide function has return type: got %v", constructor)
+	}
+
+	if constructorType.NumOut() > 2 {
+		return fmt.Errorf("must provide function has less return types than 3: got %v", constructor)
+	}
+
+	if constructorType.NumOut() > 1 {
+		returnErrorType := constructorType.Out(1)
+		if !returnErrorType.Implements(errorInterface) {
+			return fmt.Errorf("must provide function that second return type is error: got %v (sencod return type %v)", constructor, returnErrorType)
+		}
+	}
+
+	return nil
+}
+
+func (c *Container) validateResolverFunction(resolver interface{}) error {
+	resolverType := reflect.TypeOf(resolver)
+
+	if resolverType.Kind() != reflect.Func {
+		return fmt.Errorf("must provide function: got %v (type %v)", resolver, resolverType)
+	}
+
+	if resolverType.NumOut() > 1 || resolverType.NumOut() > 0 && !resolverType.Out(0).Implements(errorInterface) {
+		return fmt.Errorf("must provide function returns only error: got %v", resolver)
+	}
+
+	return nil
+}
+
+func (c *Container) construct(constructor interface{}) (reflect.Value, error) {
+	argValues, err := c.resolveArgs(constructor)
+	if err != nil {
+		return reflect.Value{}, err
+	}
+
+	constructorReturns := reflect.ValueOf(constructor).Call(argValues)
+	if len(constructorReturns) > 1 {
+		if err, ok := constructorReturns[1].Interface().(error); !ok || err != nil {
+			return reflect.Value{}, err
+		}
+	}
+
+	return constructorReturns[0], nil
+}
+
+func (c *Container) register(constructor interface{}) error {
+	constructorType := reflect.TypeOf(constructor)
+
+	key := constructorType.Out(0)
+	if _, ok := c.registry[key]; ok {
+		return fmt.Errorf("cannot provide the same return type: got %v (return type %v)", constructor, key)
+	}
+
+	c.registry[key] = &entry{
+		constructor: constructor,
+	}
+
+	return nil
+}
+
+func (c *Container) resolveArgs(resolver interface{}) ([]reflect.Value, error) {
+	resolverType := reflect.TypeOf(resolver)
+
+	var argValues []reflect.Value
+	for i := 0; i < resolverType.NumIn(); i++ {
+		argType := resolverType.In(i)
+		resolved, err := c.resolveByType(argType)
+		if err != nil {
+			return nil, fmt.Errorf("resolve failed (for %v): %s", argType, err.Error())
+		}
+		argValues = append(argValues, resolved)
+	}
+
+	return argValues, nil
+}
+
+func (c *Container) resolveByType(t reflect.Type) (reflect.Value, error) {
+	for k, v := range c.registry {
+		if k == t {
+			if !v.resolved {
+				if v.constructing {
+					return reflect.Value{}, fmt.Errorf("detected cyclic dependency for %v", t)
+				}
+				v.constructing = true
+				value, err := c.construct(v.constructor)
+				if err != nil {
+					return reflect.Value{}, err
+				}
+				v.value = value
+				v.constructing = false
+			}
+			return v.value, nil
+		}
+	}
+
+	return reflect.Value{}, fmt.Errorf("cannot find provider for %v", t)
 }
