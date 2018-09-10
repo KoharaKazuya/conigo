@@ -106,3 +106,14 @@ func TestCyclicDependencyDetection(t *testing.T) {
 		t.Error("cyclic dependency detection pass through")
 	}
 }
+
+func TestNilError(t *testing.T) {
+	container := conigo.New()
+
+	container.Provide(func() (a, error) { return "a", nil })
+	err := container.Resolve(func(_ a) {})
+
+	if err != nil {
+		t.Error("resolve a without error failed")
+	}
+}
